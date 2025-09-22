@@ -51,6 +51,26 @@ Function Remove-PyEnv() {
     Remove-PyEnvVars
 }
 
+Function Get-PyenvWinGithubBaseUrl() {
+#    $BaseUrl = "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master"
+    $BaseUrl = "https://raw.githubusercontent.com/adrien-pain-01/pyenv-win-3.1.2/master"
+
+    return $BaseUrl
+}
+
+Function Get-PyenvWinGithubZipArchive {
+    param ($DownloadPath)
+
+#    $ZipUrl = "https://github.com/pyenv-win/pyenv-win/archive/master.zip"
+#    $ZipRootFolder = "pyenv-win-master"
+    $ZipUrl = "https://github.com/adrien-pain-01/pyenv-win-3.1.2/archive/refs/heads/master.zip"
+    $ZipRootFolder = "pyenv-win-3.1.2-master"
+
+    Invoke-WebRequest -Uri $ZipUrl -OutFile $DownloadPath
+
+    return $ZipRootFolder
+}
+
 Function Get-CurrentVersion() {
     $VersionFilePath = "$PyEnvDir\.version"
     If (Test-Path $VersionFilePath) {
@@ -64,16 +84,19 @@ Function Get-CurrentVersion() {
 }
 
 Function Get-LatestVersion() {
-    $LatestVersionFilePath = "$PyEnvDir\latest.version"
-    (New-Object System.Net.WebClient).DownloadFile("https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/.version", $LatestVersionFilePath)
-    $LatestVersion = Get-Content $LatestVersionFilePath
+    $LatestVersionFilePath = New-TemporaryFile
 
+    $PyenvWinBaseUrl = "$(Get-PyenvWinGithubBaseUrl)/.version"
+    Invoke-WebRequest -Uri $PyenvWinBaseUrl -OutFile $LatestVersionFilePath
+
+    $LatestVersion = Get-Content $LatestVersionFilePath
     Remove-Item -Path $LatestVersionFilePath
 
     Return $LatestVersion
 }
 
 Function Main() {
+    # uninstall only and exit
     If ($Uninstall) {
         Remove-PyEnv
         If ($? -eq $True) {
@@ -85,46 +108,39 @@ Function Main() {
         exit
     }
 
-    $BackupDir = "${env:Temp}/pyenv-win-backup"
-    
+    # check current vs latest version
     $CurrentVersion = Get-CurrentVersion
-    If ($CurrentVersion) {
-        Write-Host "pyenv-win $CurrentVersion installed."
-        $LatestVersion = Get-LatestVersion
+    $LatestVersion = Get-LatestVersion
+
+    If ($CurrentVersion -ne "") {
+        Write-Host "Found pyenv-win version: $CurrentVersion"
+
         If ($CurrentVersion -eq $LatestVersion) {
             Write-Host "No updates available."
             exit
         }
         Else {
-            Write-Host "New version available: $LatestVersion. Updating..."
-            
-            Write-Host "Backing up existing Python installations..."
-            $FoldersToBackup = "install_cache", "versions", "shims"
-            ForEach ($Dir in $FoldersToBackup) {
-                If (-not (Test-Path $BackupDir)) {
-                    New-Item -ItemType Directory -Path $BackupDir
-                }
-                Move-Item -Path "${PyEnvWinDir}/${Dir}" -Destination $BackupDir
-            }
-            
-            Write-Host "Removing $PyEnvDir..."
-            Remove-Item -Path $PyEnvDir -Recurse
-        }   
+            Remove-PyEnv
+        }
     }
 
+    Write-Host "Installing pyenv-win version: $LatestVersion"
+
+    # create PyenvDir
     New-Item -Path $PyEnvDir -ItemType Directory
 
+    # Download PyenvWin archive (ZIP file)
     $DownloadPath = "$PyEnvDir\pyenv-win.zip"
+    $ZipRootFolder = Get-PyenvWinGithubZipArchive $DownloadPath
 
-    (New-Object System.Net.WebClient).DownloadFile("https://github.com/pyenv-win/pyenv-win/archive/master.zip", $DownloadPath)
-
+    # Extract PyenvWin archive
     Start-Process -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile",
         "-Command `"Microsoft.PowerShell.Archive\Expand-Archive -Path \`"$DownloadPath\`" -DestinationPath \`"$PyEnvDir\`"`""
     ) -NoNewWindow -Wait
 
-    Move-Item -Path "$PyEnvDir\pyenv-win-master\*" -Destination "$PyEnvDir"
-    Remove-Item -Path "$PyEnvDir\pyenv-win-master" -Recurse
+    Move-Item -Path "$PyEnvDir\$ZipRootFolder\*" -Destination "$PyEnvDir"
+    Remove-Item -Path "$PyEnvDir\$ZipRootFolder" -Recurse
     Remove-Item -Path $DownloadPath
 
     # Update env vars
@@ -140,11 +156,6 @@ Function Main() {
     $NewPath = $NewPathParts -Join ";"
     [System.Environment]::SetEnvironmentVariable('PATH', $NewPath, "User")
 
-    If (Test-Path $BackupDir) {
-        Write-Host "Restoring Python installations..."
-        Move-Item -Path "$BackupDir/*" -Destination $PyEnvWinDir
-    }
-    
     If ($? -eq $True) {
         Write-Host "pyenv-win is successfully installed. You may need to close and reopen your terminal before using it."
     }
